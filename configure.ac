@@ -1,4 +1,4 @@
-AC_INIT([enigma2-plugin-extensions-vps],[1.6],[https://github.com/opendreambox/enigma2-plugin-vps/issues])
+AC_INIT([enigma2-plugin-systemplugins-vps],[1.6],[https://github.com/opendreambox/enigma2-plugin-vps/issues])
 AM_INIT_AUTOMAKE([foreign])
 
 AM_SILENT_RULES([yes])
