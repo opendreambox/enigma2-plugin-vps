@@ -4,7 +4,9 @@ from Plugins.Plugin import PluginDescriptor
 from os import stat
 from Vps import vps_timers
 from Vps_setup import VPS_Setup
+from Vps_check import VPS_check
 from Modifications import register_vps
+from enigma import eServiceReference
 
 # Config
 from Components.config import config, ConfigYesNo, ConfigSubsection, ConfigInteger, ConfigSelection, configfile
@@ -19,6 +21,7 @@ config.plugins.vps.instanttimer = ConfigSelection(choices = [("no", _("No")), ("
 config.plugins.vps.infotext = ConfigInteger(default=0)
 config.plugins.vps.margin_after = ConfigInteger(default=10, limits=(0, 600)) # in seconds
 config.plugins.vps.wakeup_time = ConfigInteger(default=-1)
+config.plugins.vps.showincontext = ConfigYesNo(default = False)
 
 
 recordTimerWakeupAuto = False
@@ -90,6 +93,28 @@ def getNextWakeup():
 	
 	return t
 
+def checkVpsAvailability(session, ref, csel, **kwargs):
+	inBouquetRootList = isBouquetAndOrRoot(csel)
+
+	if inBouquetRootList:
+		session.open(VPS_check, ref, "bouquet")
+	else:
+		session.open(VPS_check, ref, "service")
+
+def checkconfig(csel):
+	isValid = config.plugins.vps.showincontext.value
+	current = csel.getCurrentSelection()
+	if  current.flags & eServiceReference.isMarker:
+		isValid = False
+	return isValid
+
+def isBouquetAndOrRoot(csel):
+	inBouquet = csel.getMutableList() is not None
+	current_root = csel.getRoot()
+	current_root_path = current_root and current_root.getPath()
+	inBouquetRootList = current_root_path and current_root_path.find('FROM BOUQUET "bouquets.') != -1 #FIXME HACK
+	return inBouquetRootList
+
 def Plugins(**kwargs):
 	return [
 		PluginDescriptor(
@@ -107,5 +132,12 @@ def Plugins(**kwargs):
 			where = PluginDescriptor.WHERE_MENU,
 			fnc = startSetup,
 			needsRestart = True
+		),
+		PluginDescriptor(
+			name = _("Check VPS support"),
+			description = _("Check VPS support"),
+			where = PluginDescriptor.WHERE_CHANNEL_CONTEXT_MENU,
+			fnc = checkVpsAvailability,
+			helperfnc=checkconfig,
 		),
 	]

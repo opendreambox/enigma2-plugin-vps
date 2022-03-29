@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 
-from enigma import eTimer, eConsoleAppContainer, getBestPlayableServiceReference, eServiceReference, eEPGCache
+from enigma import eTimer, eConsoleAppContainer, getBestPlayableServiceReference, eServiceReference, eEPGCache, eServiceCenter,gFont, RT_HALIGN_LEFT, RT_HALIGN_RIGHT, RT_HALIGN_CENTER, RT_VALIGN_CENTER, RT_WRAP
 from Screens.Screen import Screen
+from ServiceReference import ServiceReference
 from Components.ActionMap import ActionMap
+from Components.MultiContent import MultiContentEntryText
+from Components.Sources.List import List
 from Components.Sources.StaticText import StaticText
+from Components.ScrollLabel import ScrollLabel
 from Screens.MessageBox import MessageBox
 from Screens.ChoiceBox import ChoiceBox
+from Tools.BoundFunction import boundFunction
 from Tools.XMLTools import stringToXML
 from Tools import Directories
 from time import time
@@ -98,41 +103,98 @@ class VPS_check_PDC:
 
 Check_PDC = VPS_check_PDC()
 
-
 # Prüfen, ob PDC-Descriptor vorhanden ist.
 class VPS_check(Screen):
-	skin = """<screen name="vpsCheck" position="center,center" size="540,110" title="VPS-Plugin">
-		<widget source="infotext" render="Label" position="10,10" size="520,90" font="Regular;21" valign="center" halign="center" transparent="1" foregroundColor="white" shadowColor="black" shadowOffset="-1,-1" />
+	skin = """<screen name="vpsCheck" position="center,center" size="820,630" title="VPS-Plugin">
+		<widget source="infotext" render="Label" position="10,10" size="800,40" font="Regular;25" valign="center" halign="center" transparent="1" foregroundColor="white" shadowColor="black" shadowOffset="-1,-1" />
+		<widget source="channelList" render="Listbox" position="10,60" size="800,560">
+			<convert type="TemplatedMultiContent">
+				{
+					"templates":
+						{
+							"default":
+								(
+									40,
+										[
+											MultiContentEntryText(pos=(10,0), size=(490,40), flags=RT_HALIGN_LEFT|RT_VALIGN_CENTER|RT_WRAP, font=0, text=0),
+											MultiContentEntryText(pos=(500,0), size=(270,40), flags=RT_HALIGN_RIGHT|RT_VALIGN_CENTER|RT_WRAP, font=0, text=1),
+										]
+								),
+						},
+					"fonts": 
+						[
+							gFont("Regular", 28),
+						]
+				}
+			</convert>
+		</widget>
 	</screen>"""
 	
-	def __init__(self, session, service):
+	def __init__(self, session, service, mode="timer"):
 		Screen.__init__(self, session)
 		
 		self["infotext"] = StaticText(_("VPS-Plugin checks if the channel supports VPS ..."))
+		self["channelList"] = List()
 		
 		self["actions"] = ActionMap(["OkCancelActions"], 
 			{
-				"cancel": self.finish,
+				"cancel": boundFunction(self.finish, True),
 			}, -1)
 		
-		if service is None or service.getPath():
-			self.close()
-			return
-
-		self.service = service
+		self.mode = mode
 		self.program = eConsoleAppContainer()
 		self.dataAvail_conn = self.program.dataAvail.connect(self.program_dataAvail)
 		self.appClosed_conn = self.program.appClosed.connect(self.program_closed)
 		self.check = eTimer()
 		self.check_conn = self.check.timeout.connect(self.doCheck)
+		self.execTimer = eTimer()
+		self.execTimer_conn = self.execTimer.timeout.connect(self.program_kill)
 		self.simulate_recordService = None
 		self.last_serviceref = None
 		self.calledfinished = False
+		self.serviceName = ""
+		self.channelList = []
 		
-		self.has_pdc, self.last_check, self.default_vps = Check_PDC.check_service(self.service)
+		if mode == "bouquet":
+			self.bouquetServices = [ ]
+			servicelist = eServiceCenter.getInstance().list(service)
+			
+			if servicelist is not None:
+				while True:
+					service = servicelist.getNext()
+					if not service.valid():
+						break
+					if service.flags & (eServiceReference.isDirectory | eServiceReference.isMarker): #ignore non playable services
+						continue
+					self.bouquetServices.append(service)
+			self.checkBouquetServices()
+		else:	
+			if service is None: # or service.getPath():
+				self.close()
+				return
 		
-		self.check.start(50, True)
+			self.service = service
+			self.has_pdc, self.last_check, self.default_vps = Check_PDC.check_service(self.service)
+			self.check.start(50, True)
 
+		self.onLayoutFinish.append(self.setListState)
+		
+	def setListState(self):
+		self["channelList"].setSelectionEnabled(False)
+
+	def checkBouquetServices(self):
+		if len(self.bouquetServices):
+			self.calledfinished = False
+			service = self.bouquetServices.pop(0)
+
+			self.service = service
+			self.has_pdc, self.last_check, self.default_vps = Check_PDC.check_service(self.service)
+			self.check.start(50, True)
+		else:
+			text = self["infotext"].getText()
+			text += _("Finished")
+			self["infotext"].setText(text)
+			
 	
 	def doCheck(self):
 		if not Check_PDC.recheck(self.has_pdc, self.last_check):
@@ -185,34 +247,63 @@ class VPS_check(Screen):
 		onid = self.service.getData(3)
 		demux = "/dev/dvb/adapter0/demux" + str(self.demux)
 		
-		cmd = vps_exe + " "+ demux +" 10 "+ str(onid) +" "+ str(tsid) +" "+ str(sid) +" 0"
-		self.program.execute(cmd)
+		if sid != 0 and tsid != 0 and onid != 0:
+			cmd = vps_exe + " "+ demux +" 10 "+ str(onid) +" "+ str(tsid) +" "+ str(sid) +" 0"
+		
+			# start a timer to kill the command after 3 seconds. this is for cases where nothing is returned
+			self.execTimer.startLongTimer(3)
+			self.program.execute(cmd)
+		else:
+			# call program_closed to set PDC to unknown
+			self.program_closed(0)
+
+	def program_kill(self):
+		if self.program.running():
+			self.program.sendCtrlC()
 	
 	def program_closed(self, retval):
 		if not self.calledfinished:
 			self.setServicePDC(-1)
 			self.finish()
-	
+		else:
+			self.finish()
+			
 	def program_dataAvail(self, str):
 		lines = str.split("\n")
 		for line in lines:
 			if line == "PDC_AVAILABLE" and not self.calledfinished:
 				self.calledfinished = True
 				self.setServicePDC(1)
-				self.finish()
-				
 			elif line == "NO_PDC_AVAILABLE" and not self.calledfinished:
 				self.calledfinished = True
 				self.setServicePDC(0)
-				self.finish()
+	
+	def setInfoMessage(self):
+		if self.has_pdc == 1:
+			text = _("supported")
+		elif self.has_pdc == 0:
+			text = _("not supported")
+		else:
+			text = _("unknown")
+		servicename = ServiceReference(self.service).getServiceName().replace('\xc2\x86', '').replace('\xc2\x87', '')	
+		self.channelList.append(( servicename, text ))
+		self["channelList"].updateList(self.channelList)
+
+		if self.mode == "bouquet":
+			self.checkBouquetServices()
+		else:
+			text = self["infotext"].getText()
+			text += _("finished")
+			self["infotext"].setText(text)			
 	
 	def setServicePDC(self, state):
 		Check_PDC.setServicePDC(self.service, state, self.default_vps)
 		self.has_pdc = state
 		
-	def finish(self):
+	def finish(self, userTriggered=False):
 		self.calledfinished = True
 		self.check.stop()
+		self.execTimer.stop()
 		
 		if self.simulate_recordService is not None:
 			NavigationInstance.instance.stopRecordService(self.simulate_recordService)
@@ -221,11 +312,16 @@ class VPS_check(Screen):
 		if self.last_serviceref is not None:
 			NavigationInstance.instance.playService(self.last_serviceref)
 		
-		self.ask_user()
+		if self.mode == "timer":
+			self.ask_user()
+		else:
+			if not userTriggered:
+				self.setInfoMessage()
+			else:
+				self.close()	
 	
 	def ask_user(self):
 		pass
-
 
 class VPS_check_PDC_Screen(VPS_check):
 	def __init__(self, session, service, timer_entry, manual_timer = True):
