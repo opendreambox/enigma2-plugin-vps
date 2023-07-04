@@ -131,7 +131,8 @@ def Plugins(**kwargs):
 			name = _("VPS Settings"),
 			where = PluginDescriptor.WHERE_MENU,
 			fnc = startSetup,
-			needsRestart = True
+			needsRestart = True,
+			description=_("Settings for VPS"),
 		),
 		PluginDescriptor(
 			name = _("Check VPS support"),
